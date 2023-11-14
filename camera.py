@@ -2,7 +2,7 @@
 
 import os
 import sys
-from PyQt5.QtCore import QDate, QDir, QStandardPaths, Qt, QUrl, QTimer, QSize
+from PyQt5.QtCore import QDate, QTime, QDir, QStandardPaths, Qt, QUrl, QTimer, QSize
 from PyQt5.QtGui import QGuiApplication, QDesktopServices, QIcon
 from PyQt5.QtGui import QImage, QPixmap
 from PyQt5.QtWidgets import (
@@ -23,6 +23,7 @@ from PyQt5.QtMultimedia import (
 )
 from PyQt5.QtMultimediaWidgets import QCameraViewfinder
 from keyboard import DescriptionDialog
+from drawing import Drawing
 
 
 class ImageView(QWidget):
@@ -30,7 +31,7 @@ class ImageView(QWidget):
         super().__init__()
 
         self._file_name = fileName
-
+        self.printing_status = ""
         main_layout = QVBoxLayout(self)
         self._image_label = QLabel()
         self._image_label.setPixmap(QPixmap.fromImage(previewImage))
@@ -59,10 +60,10 @@ class MainWindow(QMainWindow):
         self._camera_info = None
         self._image_capture = None
         self.counter = 3
+        self._file_name = ""
         date_string = QDate.currentDate().toString("dd-MM-yyyy")
         self.description = f"Bild {date_string}"
         self._camera_viewfinder = QCameraViewfinder()
-
         available_cameras = QCameraInfo.availableCameras()
         if available_cameras:
             self._camera_info = available_cameras[0]
@@ -81,7 +82,7 @@ class MainWindow(QMainWindow):
         tool_bar.setOrientation(Qt.Orientation.Vertical)
         tool_bar.setMovable(False)
         tool_bar.setFloatable(False)
-        tool_bar.setIconSize(QSize(30,30))
+        tool_bar.setIconSize(QSize(50, 50))
         self.addToolBar(Qt.ToolBarArea.LeftToolBarArea, tool_bar)
 
         shutter_icon = QIcon(os.path.join(os.path.dirname(__file__), "trigger.png"))
@@ -95,9 +96,14 @@ class MainWindow(QMainWindow):
         self._take_picture_action.setToolTip("Take Picture")
         tool_bar.addAction(self._take_picture_action)
 
+        self.button_edit = QAction(QIcon("write.png"), "D", self)
+        self.button_edit.triggered.connect(self.onEditDescription)
+        self.button_edit.setToolTip("Write Image Heading")
+        tool_bar.addAction(self.button_edit)
+
         self.button_draw = QAction(QIcon("draw.png"), "D", self)
-        self.button_draw.triggered.connect(self.onDrawPhoto)
-        self.button_draw.setToolTip("Write Image Heading")
+        self.button_draw.triggered.connect(self.onDrawImage)
+        self.button_draw.setToolTip("Draw Onto Image")
         tool_bar.addAction(self.button_draw)
 
         self.button_print = QAction(QIcon("printer.png"), "P", self)
@@ -155,7 +161,11 @@ class MainWindow(QMainWindow):
         pictures_location = QStandardPaths.writableLocation(
             QStandardPaths.StandardLocation.DesktopLocation
         )
-        return f"{pictures_location}/image.jpg"
+        datestr = QDate.currentDate().toString("dd_MM_yyyy")
+        timestr = QTime().currentTime().toString("hh_mm")
+        picname = f"{datestr}_{timestr}_image"
+        self._file_name = f"{pictures_location}/{picname}.jpg"
+        return self._file_name
 
     def countdown(self):
         if self.counter > 0:
@@ -192,33 +202,58 @@ class MainWindow(QMainWindow):
         print(error_string, file=sys.stderr)
         self.show_status_message(error_string)
 
-    def print_status(self):
-        print("print photo!")
-
-    def onPrintPhoto(self):
-        fn = self.next_image_file_name()
-        QTimer.singleShot(1000, self.print_status)
-        os.system(f"lp -o fit-to-page {fn}")
-        QTimer.singleShot(1000, self.print_status)
+    def print_description_func(self):
         loc = QStandardPaths.writableLocation(
             QStandardPaths.StandardLocation.DesktopLocation
         )
-        print(loc)
-        os.system(f"cat {loc}/description.txt | lp")
-        QTimer.singleShot(1000, self.print_status)
+        description_loc = f"{loc}/description.txt"
+        if os.path.isfile(description_loc):
+            os.system(f"cat {description_loc} | lp")
+            self.show_status_message("Printing Description ...")
+        else:
+            self.show_status_message("Description not found")
+
+    def print_image_func(self):
+        fn = self._file_name
+        if os.path.isfile(fn):
+            os.system(f"lp -o landscape -o fit-to-page {fn}")
+            self.show_status_message(f"Printing Image {fn} ...")
+        else:
+            self.show_status_message("Image not found")
+        QTimer.singleShot(1000, self.print_description_func)
+
+    def onPrintPhoto(self):
+        self.show_status_message("printing...")
+        QTimer.singleShot(1000, self.print_image_func)
 
     def onAbandonPhoto(self):
         if self._tab_widget.count() > 1:
             self._tab_widget.tabBar().removeTab(1)
             print("back to camera!")
 
-    def onDrawPhoto(self):
+    def onDrawImage(self):
+        if self._file_name == "":
+            fn = self.next_image_file_name()
+            img = QImage(self.size(), QImage.Format.Format_Grayscale8)
+            img.fill(Qt.white)
+            drawing_view = Drawing(fn, img)
+            self.show_status_message("Draw new Image")
+        else:
+            drawing_view = Drawing(self._file_name, self._current_preview)
+            self.show_status_message("Draw on Image")
+        #self._tab_widget.addTab(drawing_view, "Draw on Image")
+        if drawing_view.exec():
+            print("Success!")
+        else:
+            print("Cancel!")
+
+    def onEditDescription(self):
         ddialog = DescriptionDialog(self.description)
         if ddialog.exec():
             print("Success!")
         else:
             print("Cancel!")
-        print("draw on photo!")
+        print("edit description")
 
 
 def main():
