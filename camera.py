@@ -2,7 +2,7 @@
 
 import os
 import sys
-from PyQt5.QtCore import QDate, QTime, QDir, QStandardPaths, Qt, QUrl, QTimer, QSize
+from PyQt5.QtCore import QDate, QTime, QDir, Qt, QUrl, QTimer, QSize
 from PyQt5.QtGui import QGuiApplication, QDesktopServices, QIcon
 from PyQt5.QtGui import QImage, QPixmap
 from PyQt5.QtWidgets import (
@@ -24,6 +24,8 @@ from PyQt5.QtMultimedia import (
 from PyQt5.QtMultimediaWidgets import QCameraViewfinder
 from keyboard import DescriptionDialog
 from drawing import Drawing
+from picamera2 import Picamera2
+from picamera2.previews.qt import QGlPicamera2
 
 
 class ImageView(QWidget):
@@ -55,34 +57,20 @@ class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
 
-        self._capture_session = None
         self._camera = None
+        self.picam2 = None
         self._camera_info = None
         self._image_capture = None
         self.counter = 3
         self._file_name = ""
         date_string = QDate.currentDate().toString("dd-MM-yyyy")
         self.description = f"Bild {date_string}"
-        self._camera_viewfinder = QCameraViewfinder()
-        available_cameras = QCameraInfo.availableCameras()
-        if available_cameras:
-            self._camera_info = available_cameras[0]
-            self._camera = QCamera(self._camera_info)
-            self._camera.setCaptureMode(QCamera.CaptureMode.CaptureStillImage)
-            self._camera.errorOccurred.connect(self._camera_error)
-            self._camera.setViewfinder(self._camera_viewfinder)
-            self._image_capture = QCameraImageCapture(self._camera)
-            self._image_capture.imageCaptured.connect(self.image_captured)
-            self._image_capture.imageSaved.connect(self.image_saved)
-            self._image_capture.error.connect(self._capture_error)
-
-        self._current_preview = QImage()
 
         tool_bar = QToolBar()
         tool_bar.setOrientation(Qt.Orientation.Vertical)
         tool_bar.setMovable(False)
         tool_bar.setFloatable(False)
-        tool_bar.setIconSize(QSize(50, 50))
+        tool_bar.setIconSize(QSize(30, 30))
         self.addToolBar(Qt.ToolBarArea.LeftToolBarArea, tool_bar)
 
         shutter_icon = QIcon(os.path.join(os.path.dirname(__file__), "trigger.png"))
@@ -120,30 +108,28 @@ class MainWindow(QMainWindow):
         self.finish.triggered.connect(self.closeEvent)
         tool_bar.addAction(self.finish)
 
-        self._tab_widget = QTabWidget(self, tabsClosable=True)
-        self._tab_widget.setStyleSheet(
-            "QTabWidget::pane { margin: 0px; border: none; padding: 0px; top: -40px;}"
-        )
-        self.setCentralWidget(self._tab_widget)
+        available_cameras = QCameraInfo.availableCameras()
+        if available_cameras:
+            self._camera_info = available_cameras[0]
+            self._camera = QCamera(self._camera_info)
 
-        self._tab_widget.addTab(self._camera_viewfinder, "Take Image")
-        self._tab_widget.tabBar().setTabButton(
-            0, QTabBar.ButtonPosition.RightSide, None
-        )
-        self._tab_widget.tabCloseRequested.connect(self._tab_widget.tabBar().removeTab)
+            self.picam2 = Picamera2()
+            self.picam2.configure(
+                self.picam2.create_preview_configuration({"size": (350, 300)})
+            )
+            self.qpicamera2 = QGlPicamera2(
+                self.picam2, width=350, height=300, keep_ar=False
+            )
+            self.qpicamera2.done_signal.connect(self.capture_done)
+        
+            self.setCentralWidget(self.qpicamera2)
 
         if self._camera and self._camera.error() != QCamera.Error:
             name = self._camera_info.description()
             self.setWindowTitle(f"Thermal Printer ({name})")
             self.show_status_message(f"Starting: '{name}'")
-            # self._capture_session.setVideoOutput(self._camera_viewfinder)
-            self._take_picture_action.setEnabled(
-                self._image_capture.isReadyForCapture()
-            )
-            self._image_capture.readyForCaptureChanged.connect(
-                self._take_picture_action.setEnabled
-            )
-            self._camera.start()
+            self._take_picture_action.setEnabled(True)
+            self.picam2.start()
         else:
             self.setWindowTitle("Thermal Printer")
             self._take_picture_action.setEnabled(False)
@@ -153,18 +139,15 @@ class MainWindow(QMainWindow):
         self.statusBar().showMessage(message, 5000)
 
     def closeEvent(self, event):
-        if self._camera and self._camera.status() == QCamera.Status.ActiveStatus:
-            self._camera.stop()
+        if self.picam2:
+            self.picam2.stop()
         self.close()
 
     def next_image_file_name(self):
-        pictures_location = QStandardPaths.writableLocation(
-            QStandardPaths.StandardLocation.DesktopLocation
-        )
         datestr = QDate.currentDate().toString("dd_MM_yyyy")
         timestr = QTime().currentTime().toString("hh_mm")
         picname = f"{datestr}_{timestr}_image"
-        self._file_name = f"{pictures_location}/{picname}.jpg"
+        self._file_name = f"/home/lilli/Desktop/{picname}.jpg"
         return self._file_name
 
     def countdown(self):
@@ -177,22 +160,21 @@ class MainWindow(QMainWindow):
             self.counter -= 1
             QTimer.singleShot(500, self.countdown)
         else:
-            self._current_preview = QImage()
-            self._image_capture.capture(self.next_image_file_name())
-            self.show_status_message("")
+            cfg = self.picam2.create_still_configuration()
+            fileName = self.next_image_file_name()
+            self.picam2.switch_mode_and_capture_file(
+                cfg, fileName, wait=False, signal_function=self.qpicamera2.signal_done
+            )
+            self.show_status_message("done making image")
             self.counter = 3
 
     def take_picture(self):
+        self._take_picture_action.setEnabled(False)
         self.countdown()
 
-    def image_captured(self, id, previewImage):
-        self._current_preview = previewImage
-
-    def image_saved(self, id, fileName):
-        index = self._tab_widget.count()
-        image_view = ImageView(self._current_preview, fileName, self.description)
-        self._tab_widget.addTab(image_view, f"Capture #{index}")
-        self._tab_widget.setCurrentIndex(index)
+    def capture_done(self):
+        self.show_status_message("capture_done")
+        self._take_picture_action.setEnabled(True)
 
     def _capture_error(self, id, error, error_string):
         print(error_string, file=sys.stderr)
@@ -203,10 +185,7 @@ class MainWindow(QMainWindow):
         self.show_status_message(error_string)
 
     def print_description_func(self):
-        loc = QStandardPaths.writableLocation(
-            QStandardPaths.StandardLocation.DesktopLocation
-        )
-        description_loc = f"{loc}/description.txt"
+        description_loc = "/home/lilli/Desktop/description.txt"
         if os.path.isfile(description_loc):
             os.system(f"cat {description_loc} | lp")
             self.show_status_message("Printing Description ...")
@@ -216,6 +195,7 @@ class MainWindow(QMainWindow):
     def print_image_func(self):
         fn = self._file_name
         if os.path.isfile(fn):
+            print("printing image", fn)
             os.system(f"lp -o landscape -o fit-to-page {fn}")
             self.show_status_message(f"Printing Image {fn} ...")
         else:
@@ -227,9 +207,9 @@ class MainWindow(QMainWindow):
         QTimer.singleShot(1000, self.print_image_func)
 
     def onAbandonPhoto(self):
-        if self._tab_widget.count() > 1:
-            self._tab_widget.tabBar().removeTab(1)
-            print("back to camera!")
+        preview_config = self.picam2.create_preview_configuration()
+        self.picam2.switch_mode(preview_config)
+        print("back to camera!")
 
     def onDrawImage(self):
         if self._file_name == "":
@@ -239,9 +219,10 @@ class MainWindow(QMainWindow):
             drawing_view = Drawing(fn, img)
             self.show_status_message("Draw new Image")
         else:
-            drawing_view = Drawing(self._file_name, self._current_preview)
+            img = QImage()
+            img.load(self._file_name)
+            drawing_view = Drawing(self._file_name, img)
             self.show_status_message("Draw on Image")
-        #self._tab_widget.addTab(drawing_view, "Draw on Image")
         if drawing_view.exec():
             print("Success!")
         else:

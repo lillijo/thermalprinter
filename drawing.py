@@ -14,7 +14,7 @@ class Drawing(QDialog):
         self.setWindowTitle("Paint On Image")
 
         # setting geometry to main window
-        self.resize(470, 250)
+        self.resize(350, 300)
 
         self.image = image
         self.resize(image.size())
@@ -44,6 +44,12 @@ class Drawing(QDialog):
         mainMenu.addWidget(clearAction)
         # adding action to the clear
         clearAction.clicked.connect(self.clear)
+
+        # creating clear action
+        cancelAction = QPushButton("Cancel", self)
+        mainMenu.addWidget(cancelAction)
+        # adding action to the clear
+        cancelAction.clicked.connect(self.cancel)
 
         # creating options for brush sizes
         # creating action for selecting pixel of 4px
@@ -129,6 +135,10 @@ class Drawing(QDialog):
     def save(self):
         print(self.file_path)
         self.image.save(self.file_path)
+        self.close()
+
+    # method for saving canvas
+    def cancel(self):
         self.close()
 
     # method for clearing every thing on canvas
